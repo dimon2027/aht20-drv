@@ -8,3 +8,6 @@ deploy_raspi:
 build_raspi:
 	cargo build --release --target=aarch64-unknown-linux-gnu
 
+build_linux:
+	cargo build --release
+
