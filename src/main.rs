@@ -141,31 +141,25 @@ impl Aht20 {
 }
 
 fn main() {
-    // /dev/i2c-1
     let mut drv = Aht20 { fd: -1 };
     let pathname = "/dev/i2c-1";
 
-    let res = drv.init(pathname, 0x38);
+    let res = drv.init(pathname, 0); // Default address (0x38) will be used
 
-    if res {
-        println!("The device has been opened, fd = {}", drv.fd);
-    } else {
+    if !res {
         println!("Failed to open the device!");
+        return;
     }
 
     let (t, h, res) = drv.get_temp_and_hum();
-    println!(
-        "The temperatrue, humidity and res are: {}, {}, {}",
-        t, h, res
-    );
-
-    let res = drv.close();
-
-    if res {
-        println!("The devices has been successfully closed!");
-    } else {
-        println!("Failed to close the device!");
+    if !res {
+        println!("Failed to read temperature and humidity!");
+        return;
     }
+
+    println!("The temperatrue and humidity are: {}, {}", t, h);
+
+    drv.close();
 }
 
 extern "C" {
