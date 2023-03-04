@@ -20,6 +20,16 @@ impl Aht20 {
 
         true
     }
+
+    fn close(&mut self) -> bool {
+        if self.fd == -1 {
+            return true;
+        };
+
+        let res = unsafe { close(self.fd) };
+
+        res == 0
+    }
 }
 
 fn main() {
@@ -34,8 +44,18 @@ fn main() {
     } else {
         println!("Failed to open the device!");
     }
+
+    let res = drv.close();
+
+    if res {
+        println!("The devices has been successfully closed!");
+    } else {
+        println!("Failed to close the device!");
+    }
 }
 
 extern "C" {
     fn open(pathname: *const ffi::c_char, flags: i32) -> i32;
+
+    fn close(fd: i32) -> i32;
 }
