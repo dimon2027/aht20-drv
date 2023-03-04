@@ -8,9 +8,17 @@ struct Aht20 {
     fd: i32,
 }
 
+// TODO: Error handling
+// TODO: make some methods private
+// TODO: turn this into a library
+// TODO: optional: calculate CRC
 impl Aht20 {
     fn init(&mut self, pathname: &str, addr: i32) -> bool {
-        let pathname = ffi::CString::new(pathname).expect("Failed to create a CString");
+        let res = ffi::CString::new(pathname);
+        if !res.is_ok() {
+            return false;
+        }
+        let pathname = res.unwrap();
 
         let fd = unsafe { open(pathname.as_ptr(), O_RDWR) };
 
@@ -20,7 +28,9 @@ impl Aht20 {
             return false;
         }
 
-        let res = unsafe { ioctl(self.fd, I2C_SLAVE, AHT20_ADDR) };
+        let addr = if addr > 0 { addr } else { AHT20_ADDR };
+
+        let res = unsafe { ioctl(self.fd, I2C_SLAVE, addr) };
         if res < 0 {
             println!("error failed to send ioctl");
             return false;
@@ -39,16 +49,16 @@ impl Aht20 {
         res == 0
     }
 
-    fn temperature(&self) -> (f64, bool) {
+    fn get_temp_and_hum(&self) -> (f64, f64, bool) {
         let (status, res) = self.read_status();
         if !res {
-            return (0.0, false);
+            return (0.0, 0.0, false);
         }
 
         if status & 0b1000 == 0 {
             let res = self.initialize();
             if !res {
-                return (0.0, false);
+                return (0.0, 0.0, false);
             }
         }
 
@@ -56,8 +66,8 @@ impl Aht20 {
 
         let res = unsafe { write(self.fd, writebuf.as_ptr() as *const ffi::c_void, 3) };
         if res != 3 {
-            println!("error temperature 2, failed to write, res = {}", res);
-            return (0.0, false);
+            println!("error, failed to write to sensor, res = {}", res);
+            return (0.0, 0.0, false);
         }
 
         thread::sleep(time::Duration::from_millis(80));
@@ -65,14 +75,14 @@ impl Aht20 {
         let readbuf: [u8; 7] = [0; 7];
         let res = unsafe { read(self.fd, readbuf.as_ptr() as *const ffi::c_void, 7) };
         if res != 7 as isize {
-            println!("error temperature 2, failed to read, res = {}", res);
-            return (0.0, false);
+            println!("error, failed to read from sensor, res = {}", res);
+            return (0.0, 0.0, false);
         }
 
         let status = readbuf[0];
         if status & 0b10000000 != 0 {
             println!("error: bit[7] of status word is not 0!");
-            return (0.0, false);
+            return (0.0, 0.0, false);
         }
 
         let traw: u32 = (readbuf[3] & 0xF) as u32;
@@ -80,7 +90,15 @@ impl Aht20 {
         let traw = (traw << 8) + readbuf[5] as u32;
 
         let t: f64 = (traw as f64 / 1048576.0) * 200.0 - 50.0;
-        (t, true)
+
+        let hraw: u32 = readbuf[1] as u32;
+        let hraw = (hraw << 8) + readbuf[2] as u32;
+        let hraw = (hraw << 8) + readbuf[3] as u32;
+        let hraw = hraw >> 4;
+
+        let h: f64 = hraw as f64 / 1048576.0;
+
+        (t, h, true)
     }
 
     fn read_status(&self) -> (u8, bool) {
@@ -135,8 +153,11 @@ fn main() {
         println!("Failed to open the device!");
     }
 
-    let (t, res) = drv.temperature();
-    println!("The temperatrue and res are: {}, {}", t, res);
+    let (t, h, res) = drv.get_temp_and_hum();
+    println!(
+        "The temperatrue, humidity and res are: {}, {}, {}",
+        t, h, res
+    );
 
     let res = drv.close();
 
