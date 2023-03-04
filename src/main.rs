@@ -4,15 +4,12 @@ const O_RDWR: i32 = 2;
 const I2C_SLAVE: u64 = 0x0703;
 const AHT20_ADDR: i32 = 0x38;
 
-const INIT_COMMAND: i32 = 0xBE;
-const MEASURE_COMMAND: i32 = 0xAC;
-
 struct Aht20 {
     fd: i32,
 }
 
 impl Aht20 {
-    fn open(&mut self, pathname: &str) -> bool {
+    fn init(&mut self, pathname: &str, addr: i32) -> bool {
         let pathname = ffi::CString::new(pathname).expect("Failed to create a CString");
 
         let fd = unsafe { open(pathname.as_ptr(), O_RDWR) };
@@ -22,6 +19,12 @@ impl Aht20 {
         } else {
             return false;
         }
+
+        let res = unsafe { ioctl(self.fd, I2C_SLAVE, AHT20_ADDR) };
+        if res < 0 {
+            println!("error failed to send ioctl");
+            return false;
+        };
 
         true
     }
@@ -36,24 +39,84 @@ impl Aht20 {
         res == 0
     }
 
-    fn temperature(&self) -> bool {
-        let res = unsafe { ioctl(self.fd, I2C_SLAVE, AHT20_ADDR) };
-        if res < 0 {
-            println!("error temperature 1");
-            return false;
-        };
+    fn temperature(&self) -> (f64, bool) {
+        let (status, res) = self.read_status();
+        if !res {
+            return (0.0, false);
+        }
 
-        let mut buf: [u8; 3] = [0; 3];
-        buf[0] = 0xAC;
-        buf[1] = 0x33;
+        if status & 0b1000 == 0 {
+            let res = self.initialize();
+            if !res {
+                return (0.0, false);
+            }
+        }
 
-        let res = unsafe { write(self.fd, buf.as_ptr() as *const ffi::c_void, 2) };
-        if res != 2 {
+        let writebuf: [u8; 3] = [0xAC, 0x33, 0x00];
+
+        let res = unsafe { write(self.fd, writebuf.as_ptr() as *const ffi::c_void, 3) };
+        if res != 3 {
             println!("error temperature 2, failed to write, res = {}", res);
+            return (0.0, false);
+        }
+
+        thread::sleep(time::Duration::from_millis(80));
+
+        let readbuf: [u8; 7] = [0; 7];
+        let res = unsafe { read(self.fd, readbuf.as_ptr() as *const ffi::c_void, 7) };
+        if res != 7 as isize {
+            println!("error temperature 2, failed to read, res = {}", res);
+            return (0.0, false);
+        }
+
+        let status = readbuf[0];
+        if status & 0b10000000 != 0 {
+            println!("error: bit[7] of status word is not 0!");
+            return (0.0, false);
+        }
+
+        let traw: u32 = (readbuf[3] & 0xF) as u32;
+        let traw = (traw << 8) + readbuf[4] as u32;
+        let traw = (traw << 8) + readbuf[5] as u32;
+
+        let t: f64 = (traw as f64 / 1048576.0) * 200.0 - 50.0;
+        (t, true)
+    }
+
+    fn read_status(&self) -> (u8, bool) {
+        // Read status word
+        let writebuf: [u8; 1] = [0x71];
+
+        let res = unsafe { write(self.fd, writebuf.as_ptr() as *const ffi::c_void, 1) };
+        if res != 1 {
+            println!("faled to write, res = {}", res);
+            return (0, false);
+        }
+
+        thread::sleep(time::Duration::from_millis(40));
+
+        let readbuf: [u8; 1] = [0; 1];
+        let res = unsafe { read(self.fd, readbuf.as_ptr() as *const ffi::c_void, 1) };
+        if res != 1 as isize {
+            println!("failed to read, res = {}", res);
+            return (0, false);
+        }
+
+        println!("The state word is: {}", readbuf[0]);
+
+        (readbuf[0], true)
+    }
+
+    fn initialize(&self) -> bool {
+        let writebuf: [u8; 3] = [0xBE, 0x08, 0x00];
+
+        let res = unsafe { write(self.fd, writebuf.as_ptr() as *const ffi::c_void, 3) };
+        if res != 3 {
+            println!("failed to write, res = {}", res);
             return false;
         }
 
-        thread::sleep(time::Duration::from_millis(100));
+        thread::sleep(time::Duration::from_millis(10));
 
         true
     }
@@ -64,7 +127,7 @@ fn main() {
     let mut drv = Aht20 { fd: -1 };
     let pathname = "/dev/i2c-1";
 
-    let res = drv.open(pathname);
+    let res = drv.init(pathname, 0x38);
 
     if res {
         println!("The device has been opened, fd = {}", drv.fd);
@@ -72,8 +135,8 @@ fn main() {
         println!("Failed to open the device!");
     }
 
-    let res = drv.temperature();
-    println!("The result of ioctl: {}", res);
+    let (t, res) = drv.temperature();
+    println!("The temperatrue and res are: {}, {}", t, res);
 
     let res = drv.close();
 
@@ -88,6 +151,6 @@ extern "C" {
     fn open(pathname: *const ffi::c_char, flags: i32) -> i32;
     fn close(fd: i32) -> i32;
     fn write(fd: ffi::c_int, buf: *const ffi::c_void, count: usize) -> isize;
-
+    fn read(fd: ffi::c_int, buf: *const ffi::c_void, count: usize) -> isize;
     fn ioctl(fd: ffi::c_int, request: u64, ...) -> ffi::c_int;
 }
